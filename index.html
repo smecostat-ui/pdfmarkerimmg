@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+<title>PDF Picture Inserter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  :root{
+    --accent:#2563eb;
+    --accent-dark:#1d4ed8;
+    --bg:#f1f5f9;
+    --toolbar-h:56px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg);
+    color:#1e293b;
+  }
+  #toolbar{
+    position:sticky;
+    top:0;
+    z-index:100;
+    background:#0f172a;
+    padding:8px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    align-items:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.2);
+  }
+  .toolbar-row{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    align-items:center;
+    justify-content:center;
+  }
+  #toolbar button{
+    background:var(--accent);
+    color:#fff;
+    border:none;
+    padding:10px 14px;
+    border-radius:8px;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+    white-space:nowrap;
+    transition:background .15s;
+  }
+  #toolbar button:hover{background:var(--accent-dark);}
+  #toolbar button:active{transform:scale(0.97);}
+  #toolbar button.toggled{background:#059669;}
+  #toolbar button:disabled{background:#475569;cursor:not-allowed;opacity:.6;}
+  .palette-label{color:#cbd5e1;font-size:13px;margin-right:2px;}
+  .swatch{
+    width:28px;height:28px;
+    padding:0;
+    border-radius:50%;
+    border:2px solid rgba(255,255,255,.3);
+  }
+  .swatch.selected{border-color:#fff;box-shadow:0 0 0 2px var(--accent);}
+  #btnClearMarks{background:#7c3aed;}
+  #btnClearMarks:hover{background:#6d28d9;}
+  .mark-canvas{
+    position:absolute;
+    top:0;left:0;
+    width:100%;height:100%;
+    pointer-events:none;
+    touch-action:none;
+  }
+  body.marking-mode .mark-canvas{pointer-events:auto;cursor:crosshair;}
+  body.marking-mode .overlay{pointer-events:none;}
+  #status{
+    text-align:center;
+    color:#64748b;
+    font-size:13px;
+    padding:6px;
+  }
+  #pagesContainer{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:20px;
+    padding:20px 10px 80px;
+  }
+  .page-wrapper{
+    position:relative;
+    background:#fff;
+    box-shadow:0 2px 10px rgba(0,0,0,.15);
+    border:2px solid transparent;
+  }
+  .page-wrapper.active-page{border-color:var(--accent);}
+  body.desktop-view .page-wrapper{width:800px;max-width:95vw;}
+  body.mobile-view .page-wrapper{width:100%;max-width:480px;}
+  .page-wrapper canvas{display:block;width:100%;height:auto;}
+  .page-label{
+    position:absolute;
+    top:-24px;
+    left:0;
+    font-size:12px;
+    color:#64748b;
+  }
+  .overlay{
+    position:absolute;
+    top:0;left:0;right:0;bottom:0;
+  }
+  .img-item{
+    position:absolute;
+    cursor:move;
+    touch-action:none;
+    border:2px dashed transparent;
+  }
+  .img-item.selected{border-color:var(--accent);}
+  .img-item img{
+    width:100%;
+    height:100%;
+    display:block;
+    pointer-events:none;
+    user-select:none;
+  }
+  .img-handle{
+    position:absolute;
+    width:18px;height:18px;
+    background:var(--accent);
+    border:2px solid #fff;
+    border-radius:50%;
+    right:-9px;
+    bottom:-9px;
+    cursor:nwse-resize;
+    touch-action:none;
+    display:none;
+  }
+  .img-item.selected .img-handle{display:block;}
+  .img-delete{
+    position:absolute;
+    width:20px;height:20px;
+    background:#dc2626;
+    color:#fff;
+    border-radius:50%;
+    top:-10px;right:-10px;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    font-size:13px;
+    font-weight:bold;
+    cursor:pointer;
+    line-height:1;
+  }
+  .img-item.selected .img-delete{display:flex;}
+  #placeholder{
+    text-align:center;
+    color:#94a3b8;
+    padding:60px 20px;
+    font-size:15px;
+  }
+  @media print{
+    #toolbar,#status,#placeholder,#markPalette{display:none !important;}
+    #pagesContainer{padding:0;gap:0;}
+    .page-wrapper{
+      box-shadow:none;
+      border:none !important;
+      width:100% !important;
+      max-width:none !important;
+      page-break-after:always;
+    }
+    .page-label{display:none;}
+    .img-handle,.img-delete{display:none !important;}
+    body.mobile-view .page-wrapper,
+    body.desktop-view .page-wrapper{width:100% !important;}
+  }
+</style>
+</head>
+<body class="desktop-view">
+
+<div id="toolbar">
+  <input type="file" id="pdfInput" accept="application/pdf" style="display:none">
+  <input type="file" id="imgInput" accept="image/*" style="display:none">
+  <div class="toolbar-row">
+    <button id="btnUpload">📄 Upload PDF</button>
+    <button id="btnMark" disabled>🖊️ PDF Marking</button>
+    <button id="btnInsert" disabled>🖼️ Insert Image</button>
+    <button id="btnSave" disabled>💾 Save</button>
+  </div>
+  <div class="toolbar-row" id="markPalette" style="display:none;">
+    <span class="palette-label">Colour:</span>
+    <button class="swatch selected" data-color="#e11d48" style="background:#e11d48;"></button>
+    <button class="swatch" data-color="#2563eb" style="background:#2563eb;"></button>
+    <button class="swatch" data-color="#16a34a" style="background:#16a34a;"></button>
+    <button class="swatch" data-color="#facc15" style="background:#facc15;"></button>
+    <button class="swatch" data-color="#000000" style="background:#000000;"></button>
+    <button class="swatch" data-color="#ffffff" style="background:#ffffff;border:1px solid #94a3b8;"></button>
+    <button id="btnClearMarks">🧹 Clear Marks</button>
+  </div>
+  <div class="toolbar-row">
+    <button id="btnMobile">📱 Mobile View</button>
+    <button id="btnDesktop" class="toggled">🖥️ Desktop View</button>
+  </div>
+</div>
+<div id="status">Upload a PDF to get started. Tap a page to make it active, then Insert Picture.</div>
+
+<div id="pagesContainer">
+  <div id="placeholder">No PDF loaded yet.</div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const pdfInput = document.getElementById('pdfInput');
+const imgInput = document.getElementById('imgInput');
+const btnUpload = document.getElementById('btnUpload');
+const btnMark = document.getElementById('btnMark');
+const btnInsert = document.getElementById('btnInsert');
+const btnSave = document.getElementById('btnSave');
+const markPalette = document.getElementById('markPalette');
+const btnClearMarks = document.getElementById('btnClearMarks');
+const btnMobile = document.getElementById('btnMobile');
+const btnDesktop = document.getElementById('btnDesktop');
+const pagesContainer = document.getElementById('pagesContainer');
+const statusEl = document.getElementById('status');
+const placeholder = document.getElementById('placeholder');
+
+let originalPdfBytes = null;
+let pdfDoc = null;          // pdfjs document
+let pageMeta = [];          // {wrapper, canvas, overlay, markCanvas, widthPt, heightPt, hasMarks}
+let activePageIndex = 0;
+let selectedImgItem = null;
+let originalFileName = 'document';
+let markingMode = false;
+let selectedColor = '#e11d48';
+
+btnUpload.addEventListener('click', () => pdfInput.click());
+btnInsert.addEventListener('click', () => imgInput.click());
+
+btnMark.addEventListener('click', () => {
+  markingMode = !markingMode;
+  document.body.classList.toggle('marking-mode', markingMode);
+  btnMark.classList.toggle('toggled', markingMode);
+  markPalette.style.display = markingMode ? 'flex' : 'none';
+});
+
+markPalette.querySelectorAll('.swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    markPalette.querySelectorAll('.swatch').forEach(s => s.classList.remove('selected'));
+    sw.classList.add('selected');
+    selectedColor = sw.dataset.color;
+  });
+});
+
+btnClearMarks.addEventListener('click', () => {
+  const meta = pageMeta[activePageIndex];
+  if(!meta) return;
+  const ctx = meta.markCanvas.getContext('2d');
+  ctx.clearRect(0, 0, meta.markCanvas.width, meta.markCanvas.height);
+  meta.hasMarks = false;
+});
+
+pdfInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  originalFileName = file.name.replace(/\.pdf$/i, '');
+  statusEl.textContent = 'Loading PDF...';
+  const buf = await file.arrayBuffer();
+  originalPdfBytes = buf.slice(0);
+  await renderPdf(buf);
+  pdfInput.value = '';
+});
+
+imgInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => addImageToPage(activePageIndex, ev.target.result);
+  reader.readAsDataURL(file);
+  imgInput.value = '';
+});
+
+btnMobile.addEventListener('click', () => setViewMode('mobile'));
+btnDesktop.addEventListener('click', () => setViewMode('desktop'));
+
+function setViewMode(mode){
+  document.body.classList.toggle('mobile-view', mode==='mobile');
+  document.body.classList.toggle('desktop-view', mode==='desktop');
+  btnMobile.classList.toggle('toggled', mode==='mobile');
+  btnDesktop.classList.toggle('toggled', mode==='desktop');
+}
+
+async function renderPdf(arrayBuffer){
+  pagesContainer.innerHTML = '';
+  pageMeta = [];
+  activePageIndex = 0;
+
+  const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
+  pdfDoc = await loadingTask.promise;
+
+  const scale = 1.5;
+  for(let i=1; i<=pdfDoc.numPages; i++){
+    const page = await pdfDoc.getPage(i);
+    const viewport = page.getViewport({scale});
+    const unitViewport = page.getViewport({scale:1});
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'page-wrapper';
+    wrapper.dataset.index = i-1;
+
+    const label = document.createElement('div');
+    label.className = 'page-label';
+    label.textContent = 'Page ' + i;
+    wrapper.appendChild(label);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    wrapper.appendChild(canvas);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    wrapper.appendChild(overlay);
+
+    const markCanvas = document.createElement('canvas');
+    markCanvas.className = 'mark-canvas';
+    markCanvas.width = viewport.width;
+    markCanvas.height = viewport.height;
+    wrapper.appendChild(markCanvas);
+
+    pagesContainer.appendChild(wrapper);
+
+    const ctx = canvas.getContext('2d');
+    await page.render({canvasContext: ctx, viewport}).promise;
+
+    wrapper.addEventListener('pointerdown', () => setActivePage(i-1), true);
+
+    const meta = {
+      wrapper, canvas, overlay, markCanvas,
+      widthPt: unitViewport.width,
+      heightPt: unitViewport.height,
+      hasMarks: false
+    };
+    pageMeta.push(meta);
+    setupMarking(meta);
+  }
+
+  setActivePage(0);
+  btnMark.disabled = false;
+  btnInsert.disabled = false;
+  btnSave.disabled = false;
+  statusEl.textContent = 'PDF loaded (' + pdfDoc.numPages + ' page' + (pdfDoc.numPages>1?'s':'') + '). Active page highlighted in blue — tap another page to switch.';
+}
+
+function setupMarking(meta){
+  const mc = meta.markCanvas;
+  const ctx = mc.getContext('2d');
+  let drawing = false;
+
+  function getPos(e){
+    const rect = mc.getBoundingClientRect();
+    const scaleX = mc.width / rect.width;
+    const scaleY = mc.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  }
+
+  mc.addEventListener('pointerdown', (e) => {
+    if(!markingMode) return;
+    drawing = true;
+    setActivePage(pageMeta.indexOf(meta));
+    mc.setPointerCapture(e.pointerId);
+    const p = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.strokeStyle = selectedColor;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  });
+
+  mc.addEventListener('pointermove', (e) => {
+    if(!drawing || !markingMode) return;
+    const p = getPos(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    meta.hasMarks = true;
+  });
+
+  function stop(e){
+    if(!drawing) return;
+    drawing = false;
+    try{ mc.releasePointerCapture(e.pointerId); }catch(err){}
+  }
+  mc.addEventListener('pointerup', stop);
+  mc.addEventListener('pointercancel', stop);
+}
+
+function setActivePage(idx){
+  activePageIndex = idx;
+  pageMeta.forEach((m,i) => m.wrapper.classList.toggle('active-page', i===idx));
+}
+
+function addImageToPage(pageIdx, dataUrl){
+  const meta = pageMeta[pageIdx];
+  if(!meta) return;
+  const img = new Image();
+  img.onload = () => {
+    const rect = meta.canvas.getBoundingClientRect();
+    const initW = Math.min(rect.width*0.4, 200);
+    const initH = initW * (img.height/img.width);
+
+    const item = document.createElement('div');
+    item.className = 'img-item selected';
+    item.style.width = initW + 'px';
+    item.style.height = initH + 'px';
+    item.style.left = (rect.width/2 - initW/2) + 'px';
+    item.style.top = (rect.height/2 - initH/2) + 'px';
+
+    const imgEl = document.createElement('img');
+    imgEl.src = dataUrl;
+    item.appendChild(imgEl);
+
+    const handle = document.createElement('div');
+    handle.className = 'img-handle';
+    item.appendChild(handle);
+
+    const del = document.createElement('div');
+    del.className = 'img-delete';
+    del.textContent = '✕';
+    item.appendChild(del);
+
+    meta.overlay.appendChild(item);
+    selectImage(item);
+
+    makeDraggable(item, meta);
+    makeResizable(item, handle, meta);
+
+    del.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      item.remove();
+      if(selectedImgItem === item) selectedImgItem = null;
+    });
+
+    item.addEventListener('pointerdown', (e) => {
+      if(e.target === handle || e.target === del) return;
+      selectImage(item);
+    });
+  };
+  img.src = dataUrl;
+}
+
+function selectImage(item){
+  document.querySelectorAll('.img-item.selected').forEach(el => el.classList.remove('selected'));
+  item.classList.add('selected');
+  selectedImgItem = item;
+}
+
+function makeDraggable(item, meta){
+  let startX, startY, startLeft, startTop, dragging=false;
+  item.addEventListener('pointerdown', (e) => {
+    if(e.target.classList.contains('img-handle') || e.target.classList.contains('img-delete')) return;
+    dragging = true;
+    item.setPointerCapture(e.pointerId);
+    startX = e.clientX; startY = e.clientY;
+    startLeft = parseFloat(item.style.left);
+    startTop = parseFloat(item.style.top);
+    e.stopPropagation();
+  });
+  item.addEventListener('pointermove', (e) => {
+    if(!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const rect = meta.canvas.getBoundingClientRect();
+    let newLeft = startLeft + dx;
+    let newTop = startTop + dy;
+    newLeft = Math.max(-item.offsetWidth*0.5, Math.min(newLeft, rect.width - item.offsetWidth*0.5));
+    newTop = Math.max(-item.offsetHeight*0.5, Math.min(newTop, rect.height - item.offsetHeight*0.5));
+    item.style.left = newLeft + 'px';
+    item.style.top = newTop + 'px';
+  });
+  item.addEventListener('pointerup', (e) => { dragging=false; try{item.releasePointerCapture(e.pointerId);}catch(err){} });
+  item.addEventListener('pointercancel', () => dragging=false);
+}
+
+function makeResizable(item, handle, meta){
+  let startX, startY, startW, startH, resizing=false;
+  handle.addEventListener('pointerdown', (e) => {
+    resizing = true;
+    handle.setPointerCapture(e.pointerId);
+    startX = e.clientX; startY = e.clientY;
+    startW = item.offsetWidth; startH = item.offsetHeight;
+    e.stopPropagation();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if(!resizing) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const ratio = startH/startW;
+    let newW = Math.max(20, startW + dx);
+    let newH = newW * ratio;
+    item.style.width = newW + 'px';
+    item.style.height = newH + 'px';
+  });
+  handle.addEventListener('pointerup', (e) => { resizing=false; try{handle.releasePointerCapture(e.pointerId);}catch(err){} });
+  handle.addEventListener('pointercancel', () => resizing=false);
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if(!e.target.closest('.img-item')){
+    document.querySelectorAll('.img-item.selected').forEach(el => el.classList.remove('selected'));
+    selectedImgItem = null;
+  }
+});
+
+btnSave.addEventListener('click', async () => {
+  if(!originalPdfBytes){ alert('Please upload a PDF first.'); return; }
+  statusEl.textContent = 'Generating PDF...';
+  try{
+    const { PDFDocument } = PDFLib;
+    const pdfLibDoc = await PDFDocument.load(originalPdfBytes);
+    const pages = pdfLibDoc.getPages();
+
+    for(let i=0; i<pageMeta.length; i++){
+      const meta = pageMeta[i];
+      const page = pages[i];
+      const canvasRect = meta.canvas.getBoundingClientRect();
+      const items = meta.overlay.querySelectorAll('.img-item');
+
+      for(const item of items){
+        const imgEl = item.querySelector('img');
+        const dataUrl = imgEl.src;
+
+        const leftPx = parseFloat(item.style.left);
+        const topPx = parseFloat(item.style.top);
+        const wPx = item.offsetWidth;
+        const hPx = item.offsetHeight;
+
+        const xPt = (leftPx / canvasRect.width) * meta.widthPt;
+        const wPt = (wPx / canvasRect.width) * meta.widthPt;
+        const hPt = (hPx / canvasRect.height) * meta.heightPt;
+        const yPt = meta.heightPt - ((topPx / canvasRect.height) * meta.heightPt) - hPt;
+
+        let embedded;
+        if(dataUrl.startsWith('data:image/png')){
+          embedded = await pdfLibDoc.embedPng(dataUrl);
+        } else {
+          embedded = await pdfLibDoc.embedJpg(dataUrl);
+        }
+
+        page.drawImage(embedded, { x: xPt, y: yPt, width: wPt, height: hPt });
+      }
+
+      if(meta.hasMarks){
+        const markDataUrl = meta.markCanvas.toDataURL('image/png');
+        const markEmbedded = await pdfLibDoc.embedPng(markDataUrl);
+        page.drawImage(markEmbedded, { x: 0, y: 0, width: meta.widthPt, height: meta.heightPt });
+      }
+    }
+
+    const outBytes = await pdfLibDoc.save();
+    const blob = new Blob([outBytes], {type:'application/pdf'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = originalFileName + '_edited.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    statusEl.textContent = 'Saved! Your edited PDF has been downloaded.';
+  }catch(err){
+    console.error(err);
+    statusEl.textContent = 'Error while saving. See console for details.';
+    alert('Something went wrong while saving the PDF: ' + err.message);
+  }
+});
+</script>
+</body>
+</html>
